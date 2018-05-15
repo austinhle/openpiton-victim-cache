@@ -1,0 +1,80 @@
+// Author: Austin Le, Chirag Bharadwaj
+// ELE 575 Spring 2018
+
+`include "define.vh"
+`ifdef DEFAULT_NETTYPE_NONE
+`default_nettype none
+`endif
+
+module sram_l15_udata
+(
+  input wire MEMCLK,
+  input wire RESET_N,
+  input wire CE,
+  input wire [`L15_NUM_ENTRIES_LOG2-1:0] A,
+  input wire RDWEN,
+  input wire [`L15_CACHELINE_WIDTH-1:0] BW,
+  input wire [`L15_CACHELINE_WIDTH-1:0] DIN,
+  output wire [`L15_CACHELINE_WIDTH-1:0] DOUT,
+  input wire [`BIST_OP_WIDTH-1:0] BIST_COMMAND,
+  input wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DIN,
+  output reg [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
+  input wire [`BIST_ID_WIDTH-1:0] SRAMID,
+
+  // Victim data fields
+  input wire [`L15_VCACHE_NUM_ENTRIES_LOG2-1:0] VA,
+
+  // Cache miss state
+  input wire [`L15_CM_STATE_WIDTH-1:0] CMST
+);
+
+// Primary L15 data
+reg [`L15_CACHELINE_WIDTH-1:0] pdata [`L15_NUM_ENTRIES-1:0];
+
+// Victim L15 data
+reg [`L15_CACHELINE_WIDTH-1:0] vdata [`L15_VCACHE_NUM_ENTRIES-1:0];
+
+// Initialize all data to 0
+integer i;
+initial begin
+  for (i = 0; i < `L15_NUM_ENTRIES; i = i + 1) begin
+    pdata[i] = 0;
+  end
+end
+initial begin
+  for (i = 0; i < `L15_VCACHE_NUM_ENTRIES; i = i + 1) begin
+    vdata[i] = 0;
+  end
+end
+
+// Primary data output
+reg [`L15_CACHELINE_WIDTH-1:0] dout_f;
+assign DOUT = dout_f;
+
+always @ (posedge MEMCLK) begin
+  if (CE) begin
+    case (CMST)
+      `L15_CM_STATE_HX: begin
+        if (RDWEN == 1'b0) begin
+          pdata[A] <= (DIN & BW) | (pdata[A] & ~BW);
+        end
+        else begin
+          dout_f <= pdata[A];
+        end
+      end
+      `L15_CM_STATE_MM: begin
+        vdata[VA] <= pdata[A];
+      end
+      `L15_CM_STATE_MH: begin // SWAP!
+        vdata[VA] <= pdata[A];
+        pdata[A]  <= vdata[VA];
+        dout_f    <= vdata[VA];
+      end
+      default: begin
+        // Already handled by S1 logic
+      end
+    endcase
+  end
+end
+
+endmodule

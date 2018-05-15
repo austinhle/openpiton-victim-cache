@@ -1,0 +1,165 @@
+// Author: Austin Le, Chirag Bharadwaj
+// ELE 575 Spring 2018
+
+`include "define.vh"
+`ifdef DEFAULT_NETTYPE_NONE
+`default_nettype none
+`endif
+
+<%
+  import os
+  import pyhplib
+  from pyhplib import *
+%>
+
+module sram_l15_utag
+(
+  input wire MEMCLK,
+  input wire RESET_N,
+  input wire CE,
+  input wire [`L15_CACHE_INDEX_WIDTH-1:0] A,
+  input wire RDWEN,
+  input wire [`L15_CACHE_TAG_RAW_SRAM_WIDTH-1:0] BW,
+  input wire [`L15_CACHE_TAG_RAW_SRAM_WIDTH-1:0] DIN,
+  output wire [`L15_CACHE_TAG_RAW_SRAM_WIDTH-1:0] DOUT,
+  input wire [`BIST_OP_WIDTH-1:0] BIST_COMMAND,
+  input wire [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DIN,
+  output reg [`SRAM_WRAPPER_BUS_WIDTH-1:0] BIST_DOUT,
+  input wire [`BIST_ID_WIDTH-1:0] SRAMID,
+
+  // Victim tag fields
+  input wire VCE,
+  input wire [`L15_VCACHE_TAG_RAW_SRAM_WIDTH-1:0] VBW,
+  input wire [`L15_VCACHE_TAG_RAW_SRAM_WIDTH-1:0] VIN,
+  output wire [`L15_VCACHE_TAG_RAW_SRAM_WIDTH-1:0] VOUT,
+
+  // Cache miss state
+  input wire [`L15_CM_STATE_WIDTH-1:0] CMST,
+  input wire [(`L15_CACHE_INDEX_WIDTH + `L15_WAY_WIDTH)-1:0] CMST_DIDX,
+  input wire [`L15_VCACHE_NUM_ENTRIES_LOG2-1:0] CMST_VIDX
+);
+
+// Primary L15 tags
+reg [`L15_CACHE_TAG_RAW_SRAM_WIDTH-1:0] ptags [`L15_CACHE_INDEX_VECTOR_WIDTH-1:0];
+
+// Victim L15 tags
+reg [`L15_VCACHE_TAG_RAW_SRAM_WIDTH-1:0] vtags;
+
+// Initialize all tags to 0
+integer i;
+initial begin
+  for (i = 0; i < `L15_CACHE_INDEX_VECTOR_WIDTH; i = i + 1) begin
+    ptags[i] = 0;
+  end
+
+  vtags = 0;
+end
+
+// Primary tag output
+reg [`L15_CACHE_TAG_RAW_SRAM_WIDTH-1:0] dout_f;
+assign DOUT = dout_f;
+
+// Victim tag output
+reg [`L15_VCACHE_TAG_RAW_SRAM_WIDTH-1:0] vout_f;
+assign VOUT = vout_f;
+
+always @ (posedge MEMCLK) begin
+  if (CE) begin
+    if (RDWEN == 1'b0) begin
+      ptags[A] <= (DIN & BW) | (ptags[A] & ~BW);
+      vtags <= (VIN & VBW) | (vtags & ~VBW);
+    end
+    else begin
+      dout_f <= ptags[A];
+      vout_f <= vtags;
+    end
+  end
+end
+
+// Piecing out the index/way information separately
+wire didx = CMST_DIDX[5:2];
+wire dway = CMST_DIDX[1:0];
+
+// Appropriate masks for the victim/data cache
+<%
+  dwidth = int(os.environ.get('L15_CACHE_TAG_RAW_SRAM_WIDTH', '132'))
+  print "wire [%d-1:0] dmask = " % (dwidth)
+  for i in range(4):
+    if (i == 3):
+      print "                {",
+      for j in range(i):
+        print "{%d{1'b0}}," % (33),
+
+      print "{%d{1'b1}}" % (33),
+
+      print "} ;"
+    else:
+      print "  (dway == %d) ? {" % (4 - i - 1),
+      for j in range(i):
+        print "{%d{1'b0}}," % (33),
+
+      print "{%d{1'b1}}," % (33),
+
+      for j in range(i+1, 4):
+        if (j == 3):
+          print "{%d{1'b0}}" % (33),
+        else:
+          print "{%d{1'b0}}," % (33),
+
+      print "} :"
+%>
+
+<%
+  vwidth = int(os.environ.get('L15_VCACHE_TAG_RAW_SRAM_WIDTH', '132'))
+  pwidth = int(os.environ.get('L15_CACHE_TAG_RAW_WIDTH', '33'))
+  num = int(os.environ.get('L15_VCACHE_NUM_ENTRIES', '4'))
+  print "wire [%d-1:0] vmask = " % (vwidth)
+  for i in range(num):
+    if (i == num - 1):
+      print "                     {",
+      for j in range(i):
+        print "{%d{1'b0}}," % (pwidth),
+
+      print "{%d{1'b1}}" % (pwidth),
+
+      print "} ;"
+    else:
+      print "  (CMST_VIDX == %d) ? {" % (num - i - 1),
+      for j in range(i):
+        print "{%d{1'b0}}," % (pwidth),
+
+      print "{%d{1'b1}}," % (pwidth),
+
+      for j in range(i+1, num):
+        if (j == num - 1):
+          print "{%d{1'b0}}" % (pwidth),
+        else:
+          print "{%d{1'b0}}," % (pwidth),
+
+      print "} :"
+%>
+
+// The 132 here is a pure coincidence -- fix for later (33 is fixed)
+wire [`L15_CACHE_TAG_RAW_WIDTH*4-1:0] dext
+  = ((ptags[didx] & dmask) >> (dway * `L15_CACHE_TAG_RAW_WIDTH)) << (CMST_VIDX * `L15_CACHE_TAG_RAW_WIDTH);
+wire [`L15_VCACHE_TAG_RAW_SRAM_WIDTH-1:0] vext
+  = ((vtags & vmask) >> (CMST_VIDX * `L15_CACHE_TAG_RAW_WIDTH)) << (dway * `L15_CACHE_TAG_RAW_WIDTH);
+
+always @ (posedge MEMCLK) begin
+  if (VCE) begin
+    case (CMST)
+      `L15_CM_STATE_MM: begin
+        vtags    <= (dext & vmask) | (vtags & ~vmask);
+      end
+      `L15_CM_STATE_MH: begin // SWAP!
+        vtags    <= (dext & vmask) | (vtags & ~vmask);
+        ptags[didx] <= (vext & dmask) | (ptags[didx] & ~dmask);
+      end
+      default: begin
+        // Already handled by S1 logic
+      end
+    endcase
+  end
+end
+
+endmodule

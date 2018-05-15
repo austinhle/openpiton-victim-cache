@@ -1,0 +1,84 @@
+// Author: Austin Le, Chirag Bharadwaj
+// ELE 575 Spring 2018
+
+<%
+  import os
+  import pyhplib
+  from pyhplib import *
+%>
+
+module rf_l15_vi (
+   input wire clk,
+   input wire rst_n,
+
+   input wire read_valid,
+   input wire [`L15_VCACHE_TAG_RAW_SRAM_WIDTH-1:0] read_mask,
+
+   input wire write_valid,
+   input wire [`L15_VCACHE_NUM_ENTRIES-1:0] write_mask,
+   input wire [`L15_VCACHE_NUM_ENTRIES-1:0] write_data,
+
+   output reg read_data
+   );
+
+reg read_valid_f;
+
+reg [`L15_VCACHE_NUM_ENTRIES-1:0] write_data_f;
+reg [`L15_VCACHE_NUM_ENTRIES-1:0] write_mask_f;
+reg write_valid_f;
+
+reg [`L15_VCACHE_NUM_ENTRIES-1:0] vi;
+
+// Read port
+<%
+  pwidth = int(os.environ.get('L15_CACHE_TAG_RAW_WIDTH', '33'))
+  num = int(os.environ.get('L15_VCACHE_NUM_ENTRIES', '4'))
+  log = int(os.environ.get('L15_VCACHE_NUM_ENTRIES_LOG2', '2'))
+  print "wire [%d-1:0] read_ext = " % (log)
+  for i in range(num):
+    print "  (read_mask == {",
+
+    for j in range(i):
+      print "{%d{1'b0}}," % (pwidth),
+
+    if (i == num - 1):
+      print "{%d{1'b1}}" % (pwidth),
+    else:
+      print "{%d{1'b1}}," % (pwidth),
+
+    for j in range(i+1, num):
+      if (j == num - 1):
+        print "{%d{1'b0}}" % (pwidth),
+      else:
+        print "{%d{1'b0}}," % (pwidth),
+
+    print "}) ? %d :" % (num - i - 1)
+
+  print "  %d'dx;" % (log)
+%>
+
+always @ (posedge clk) begin
+  read_valid_f <= read_valid;
+  if (read_valid) begin
+    read_data <= vi[read_ext];
+  end
+end
+
+// Write port
+always @ (posedge clk) begin
+  write_valid_f <= write_valid;
+  if (write_valid) begin
+    write_data_f <= write_data;
+    write_mask_f <= write_mask;
+  end
+end
+
+always @ (posedge clk) begin
+  if (!rst_n) begin
+    vi <= 0;
+  end
+  else if (write_valid_f) begin
+    vi <= (write_data_f & write_mask_f) | (vi & ~write_mask_f);
+  end
+end
+endmodule

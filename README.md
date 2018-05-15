@@ -1,4 +1,4 @@
-# ele575-final-project
+# ELE 575 Spring 2018 Final Project: Victim Caches in OpenPiton
 
 Implementing Victim Caches in OpenPiton.
 
